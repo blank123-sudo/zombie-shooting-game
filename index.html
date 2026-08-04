@@ -49,6 +49,14 @@
         #crosshair::before { top: 5px; left: -10px; width: 32px; height: 2px; }
         #crosshair::after { top: -10px; left: 5px; width: 2px; height: 32px; }
 
+        /* Minimap Styling */
+        #minimap-container {
+            position: absolute; top: 20px; right: 20px; width: 160px; height: 160px;
+            background: rgba(0, 0, 0, 0.8); border: 2px solid #33ff33; border-radius: 4px;
+            z-index: 10; pointer-events: none; box-shadow: 0 0 10px rgba(0,255,0,0.3);
+        }
+        #minimap { width: 100%; height: 100%; display: block; }
+
         #overlay, #shop-menu {
             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
             background: rgba(0,0,0,0.92); color: #33ff33; display: flex;
@@ -110,6 +118,11 @@
         WAVE: <span id="wave">1</span> | HP: <span id="hp">100</span>% | SCORE: <span id="score">0</span> | CASH: <span id="money-display">$0</span> | WEAPON: <span id="weapon-name" style="color:#ffd700;">PISTOL</span> | AMMO: <span id="ammo">12</span>/<span id="reserve-ammo">60</span> <span id="reloading-text" style="color: #ff3333; display: none;">[RELOADING...]</span>
     </div>
     <div id="ads-indicator">STATUS: <span id="lan-status" style="color: #ff3333;">OFFLINE (SOLO)</span> | CAM: <span id="cam-mode-text">1ST PERSON (C)</span> | <b>[B/TAB]</b> Shop (2026)</div>
+    
+    <div id="minimap-container">
+        <canvas id="minimap" width="160" height="160"></canvas>
+    </div>
+
     <div id="wave-banner">WAVE CLEARED!<br><span style="font-size: 20px; color: #fff;">NEXT WAVE INCOMING...</span></div>
     <div id="boss-banner">WARNING: BOSS WAVE IMMINENT!</div>
     
@@ -119,28 +132,34 @@
         <h1 id="title">SURVIVAL 3D: HORROR</h1>
         <p id="sub">Select Game Mode or Enter Custom Room</p>
         <br>
+        <div style="margin-bottom: 10px;">
+            <label style="font-size: 14px; color: #00c3ff;">PLAYER NAME: </label>
+            <input type="text" id="player-name-input" class="room-input" style="width: 180px; padding: 6px;" value="Survivor_1" maxlength="12">
+        </div>
         <div id="menu-buttons">
             <button class="menu-btn" onclick="startSoloMode()">SOLO PLAY (OFFLINE)</button>
             <button class="menu-btn multi" onclick="showRoomMenu()">MULTIPLAYER (CUSTOM ROOMS)</button>
         </div>
 
-        <div id="room-menu-container" style="display:none; margin-top:10px;">
-            <p style="color:#00c3ff; font-weight:bold; margin-bottom:5px;">CREATE OR JOIN ROOM</p>
-            <input type="text" id="room-code-input" class="room-input" placeholder="ENTER ROOM CODE" maxlength="8"><br>
-            <button class="menu-btn multi" onclick="joinCustomRoom()">JOIN / CREATE ROOM</button>
+        <div id="room-menu-container" style="display:none; margin-top:5px;">
+            <p style="color:#00c3ff; font-weight:bold; margin-bottom:5px;">HOST OR JOIN MATCH</p>
+            <button class="menu-btn multi" onclick="hostNewRoom()">HOST NEW ROOM</button>
+            <p style="font-size: 12px; color: #888; margin: 4px 0;">- OR JOIN EXISTING -</p>
+            <input type="text" id="room-code-input" class="room-input" placeholder="ROOM CODE" maxlength="8"><br>
+            <button class="menu-btn multi" onclick="joinCustomRoom()">JOIN ROOM</button>
             <br>
             <button class="menu-btn" style="background:#555; color:#fff; font-size:14px; padding:8px 15px;" onclick="backToMainMenu()">BACK</button>
         </div>
 
-        <div id="lobby-container" style="display:none; margin-top:15px;">
-            <p id="lobby-status" style="color:#00c3ff; font-weight:bold; font-size:18px;">Connected to Room</p>
-            <p id="lobby-room-display" style="color:#ffd700; font-size:16px; margin:4px 0;"></p>
-            <p id="lobby-players" style="font-size:14px; color:#aaa; margin:8px 0;">Players in room: 0</p>
-            <button id="lobby-start-btn" class="menu-btn" style="background:#ffd700; display:none;" onclick="hostStartMatch()">START MATCH (HOST)</button>
-            <p id="host-wait-msg" style="color:#ffaa00; font-size:13px; margin-top:8px; display:none;">Waiting for host to start the match...</p>
+        <div id="lobby-container" style="display:none; margin-top:10px;">
+            <p id="lobby-status" style="color:#00c3ff; font-weight:bold; font-size:16px;">Connected to Room</p>
+            <p id="lobby-room-display" style="color:#ffd700; font-size:15px; margin:2px 0;"></p>
+            <div id="lobby-player-list" style="font-size:13px; color:#aaa; margin:6px auto; max-height: 90px; overflow-y: auto; width: 280px; background: rgba(0,20,0,0.5); border: 1px solid #33ff33; padding: 5px;"></div>
+            <button id="lobby-start-btn" class="menu-btn" style="background:#ffd700; display:none; padding: 8px 20px; font-size:16px;" onclick="hostStartMatch()">START MATCH (HOST)</button>
+            <p id="host-wait-msg" style="color:#ffaa00; font-size:13px; margin-top:4px; display:none;">Waiting for host to start the match...</p>
         </div>
 
-        <div id="controls-hint" style="margin-top: 20px; font-size: 13px; color: #aaa;">
+        <div id="controls-hint" style="margin-top: 15px; font-size: 12px; color: #aaa;">
             <p><b>W, A, S, D</b> - Move | <b>Spacebar</b> - Jump | <b>Mouse</b> - Look & Aim</p>
             <p><b>Left Click</b> - Shoot | <b>Right Click / Shift</b> - Scope / ADS | <b>C</b> - Cam View</p>
         </div>
@@ -158,6 +177,8 @@
     <script>
         const canvas = document.getElementById('game');
         const ctx = canvas.getContext('2d');
+        const minimapCanvas = document.getElementById('minimap');
+        const minimapCtx = minimapCanvas.getContext('2d');
         const overlay = document.getElementById('overlay');
         const shopMenu = document.getElementById('shop-menu');
         const waveBanner = document.getElementById('wave-banner');
@@ -170,10 +191,11 @@
         const menuButtons = document.getElementById('menu-buttons');
         const roomMenuContainer = document.getElementById('room-menu-container');
         const roomCodeInput = document.getElementById('room-code-input');
+        const playerNameInput = document.getElementById('player-name-input');
         const lobbyContainer = document.getElementById('lobby-container');
         const lobbyStatusEl = document.getElementById('lobby-status');
         const lobbyRoomDisplay = document.getElementById('lobby-room-display');
-        const lobbyPlayersEl = document.getElementById('lobby-players');
+        const lobbyPlayerListEl = document.getElementById('lobby-player-list');
         const lobbyStartBtn = document.getElementById('lobby-start-btn');
         const hostWaitMsg = document.getElementById('host-wait-msg');
 
@@ -188,10 +210,12 @@
         let isMultiplayer = false;
         let remotePlayers = {};
         let playerName = 'Survivor_' + Math.floor(Math.random() * 100);
+        playerNameInput.value = playerName;
         let currentRoomId = '';
         let isHost = false;
 
         function showRoomMenu() {
+            playerName = playerNameInput.value.trim() || playerName;
             menuButtons.style.display = 'none';
             roomMenuContainer.style.display = 'block';
         }
@@ -201,7 +225,27 @@
             menuButtons.style.display = 'block';
         }
 
+        // Generate a random unique 5-character room code
+        function generateRoomCode() {
+            const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+            let code = '';
+            for (let i = 0; i < 5; i++) {
+                code += chars.charAt(Math.floor(Math.random() * chars.length));
+            }
+            return code;
+        }
+
+        function hostNewRoom() {
+            playerName = playerNameInput.value.trim() || playerName;
+            currentRoomId = generateRoomCode();
+            roomMenuContainer.style.display = 'none';
+            lobbyContainer.style.display = 'block';
+            lobbyStatusEl.innerText = "Hosting Room...";
+            initCloudWebSocket(currentRoomId);
+        }
+
         function joinCustomRoom() {
+            playerName = playerNameInput.value.trim() || playerName;
             let code = roomCodeInput.value.trim().toUpperCase();
             if (!code) {
                 alert("Please enter a valid room code!");
@@ -229,17 +273,22 @@
                     let data = JSON.parse(event.data);
                     if (data.type === 'STATE') {
                         remotePlayers = data.players || {};
-                        let count = Object.keys(remotePlayers).length;
                         
-                        // Check if current user is the host
-                        isHost = (data.hostId && remotePlayers[Object.keys(remotePlayers).find(k => remotePlayers[k].id === data.hostId)] === remotePlayers[socketPlayerId(data.players)]);
-                        // Alternatively track host via ID comparison
-                        let myId = Object.keys(remotePlayers).find(k => remotePlayers[k].name === playerName); 
-                        // Simplified host check based on server data structure:
-                        isHost = (data.hostId && data.players[data.hostId] && data.players[data.hostId].name === playerName);
+                        // Check if current user is host based on server designation
+                        isHost = (data.hostId && remotePlayers[data.hostId] && remotePlayers[data.hostId].name === playerName);
 
                         lobbyRoomDisplay.innerText = `Room Code: ${roomId}`;
-                        lobbyPlayersEl.innerText = `Players in room: ${count}`;
+                        
+                        // Render detailed player list with money & status
+                        let playerKeys = Object.keys(remotePlayers);
+                        let listHtml = `<b>Players (${playerKeys.length}):</b><br>`;
+                        playerKeys.forEach(k => {
+                            let p = remotePlayers[k];
+                            let isMe = (p.name === playerName);
+                            let hostTag = (k === data.hostId) ? ' [HOST]' : '';
+                            listHtml += `- ${p.name}${hostTag} (HP: ${Math.round(p.hp || 100)}%)${isMe ? ' (You)' : ''}<br>`;
+                        });
+                        lobbyPlayerListEl.innerHTML = listHtml;
 
                         if (isHost) {
                             lobbyStartBtn.style.display = 'inline-block';
@@ -272,10 +321,6 @@
             }
         }
 
-        function socketPlayerId(playersObj) {
-            return Object.keys(playersObj)[0];
-        }
-
         function hostStartMatch() {
             if (ws && ws.readyState === WebSocket.OPEN && isHost) {
                 ws.send(JSON.stringify({ type: 'START_MATCH' }));
@@ -283,6 +328,7 @@
         }
 
         function startSoloMode() {
+            playerName = playerNameInput.value.trim() || playerName;
             isMultiplayer = false;
             lanStatusEl.innerText = "OFFLINE (SOLO)";
             lanStatusEl.style.color = "#ff3333";
@@ -691,7 +737,8 @@
         }
 
         document.addEventListener('pointerlockchange', () => {
-            if (document.pointerLockElement !== document.body && playing && !inShop) {
+            // Fixes the laptop continuous pause loop bug by verifying user intent to pause vs focus loss
+            if (document.pointerLockElement !== document.body && playing && !inShop && !isReloading) {
                 overlay.style.display = 'flex';
                 document.getElementById('title').innerText = "PAUSED";
                 document.getElementById('sub').innerText = "Click buttons or resume to continue";
@@ -699,6 +746,11 @@
         });
 
         window.addEventListener('mousedown', e => {
+            // Laptop trackpad/mouse quick-click handling to prevent accidental un-locking loops
+            if (document.pointerLockElement !== document.body && playing && !inShop) {
+                document.body.requestPointerLock();
+                return;
+            }
             if (document.pointerLockElement === document.body && !inShop) {
                 if (e.button === 2) { toggleScope(); return; }
                 if (e.button === 0) {
@@ -798,6 +850,55 @@
             offCtx.restore();
         }
 
+        // Render Minimap with Player Locations, Status, and Zombie positions
+        function drawMinimap() {
+            minimapCtx.clearRect(0, 0, 160, 160);
+            let scaleX = 160 / MAP_SIZE;
+            let scaleY = 160 / MAP_SIZE;
+
+            // Draw map walls
+            for (let y = 0; y < MAP_SIZE; y++) {
+                for (let x = 0; x < MAP_SIZE; x++) {
+                    if (map[y * MAP_SIZE + x] > 0) {
+                        minimapCtx.fillStyle = '#225522';
+                        minimapCtx.fillRect(x * scaleX, y * scaleY, scaleX, scaleY);
+                    }
+                }
+            }
+
+            // Draw Zombies on Minimap
+            minimapCtx.fillStyle = '#ff3333';
+            zombies.forEach(z => {
+                minimapCtx.beginPath();
+                minimapCtx.arc(z.x * scaleX, z.y * scaleY, z.isBoss ? 4 : 2, 0, Math.PI * 2);
+                minimapCtx.fill();
+            });
+
+            // Draw Remote Players on Minimap
+            Object.keys(remotePlayers).forEach(id => {
+                let rp = remotePlayers[id];
+                if (rp.name === playerName) return;
+                minimapCtx.fillStyle = '#00c3ff';
+                minimapCtx.beginPath();
+                minimapCtx.arc(rp.x * scaleX, rp.y * scaleY, 3, 0, Math.PI * 2);
+                minimapCtx.fill();
+            });
+
+            // Draw Local Player on Minimap
+            minimapCtx.fillStyle = '#ffff00';
+            minimapCtx.beginPath();
+            minimapCtx.arc(px * scaleX, py * scaleY, 3.5, 0, Math.PI * 2);
+            minimapCtx.fill();
+
+            // Direction indicator line for player
+            minimapCtx.strokeStyle = '#ffff00';
+            minimapCtx.lineWidth = 1.5;
+            minimapCtx.beginPath();
+            minimapCtx.moveTo(px * scaleX, py * scaleY);
+            minimapCtx.lineTo((px + Math.cos(pAngle) * 0.8) * scaleX, (py + Math.sin(pAngle) * 0.8) * scaleY);
+            minimapCtx.stroke();
+        }
+
         let lastTime = performance.now();
         function loop(now) {
             let dt = (now - lastTime) / 1000;
@@ -846,7 +947,7 @@
 
                 if (isMultiplayer && ws && ws.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({
-                        type: 'MOVE', x: px, y: py, angle: pAngle, hp: hp, wave: currentWave
+                        type: 'MOVE', x: px, y: py, angle: pAngle, hp: hp, wave: currentWave, money: playerMoney
                     }));
                 }
 
@@ -959,9 +1060,10 @@
                 }
             });
 
+            // Render other players in 3D space with their custom names and status
             Object.keys(remotePlayers).forEach(id => {
                 let rp = remotePlayers[id];
-                if (rp.name === playerName) return; // Don't render self as remote
+                if (rp.name === playerName) return; 
                 let rdx = rp.x - px, rdy = rp.y - py;
                 let rpAngle = Math.atan2(rdy, rdx) - pAngle;
                 while (rpAngle < -Math.PI) rpAngle += Math.PI * 2;
@@ -983,11 +1085,12 @@
                     ctx.fillStyle = '#ffffff';
                     ctx.font = '12px Courier New';
                     ctx.textAlign = 'center';
-                    ctx.fillText(rp.name || 'Survivor', screenX, drawY - 10);
+                    ctx.fillText(`${rp.name} (HP:${Math.round(rp.hp || 100)}%)`, screenX, drawY - 10);
                 }
             });
 
             if (cameraMode === 1) drawGun(ctx);
+            drawMinimap();
             requestAnimationFrame(loop);
         }
 
