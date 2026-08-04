@@ -68,6 +68,7 @@
         .menu-btn:hover { background: #22cc22; }
         .menu-btn.multi { background: #00c3ff; box-shadow: 0 0 10px rgba(0,195,255,0.4); }
         .menu-btn.multi:hover { background: #0099cc; }
+        .menu-btn:disabled { background: #444; color: #888; cursor: not-allowed; box-shadow: none; }
 
         /* Shop Layout */
         #shop-menu { display: none; padding: 20px; z-index: 100; }
@@ -116,8 +117,13 @@
         <p id="sub">Select Your Game Mode</p>
         <br>
         <div id="menu-buttons">
-            <button class="menu-btn" onclick="startGameMode('solo')">SOLO PLAY (OFFLINE)</button>
-            <button class="menu-btn multi" onclick="startGameMode('multi')">MULTIPLAYER (CLOUD)</button>
+            <button class="menu-btn" onclick="startSoloMode()">SOLO PLAY (OFFLINE)</button>
+            <button class="menu-btn multi" onclick="selectMultiplayer()">MULTIPLAYER (CLOUD)</button>
+        </div>
+        <div id="lobby-container" style="display:none; margin-top:15px;">
+            <p id="lobby-status" style="color:#00c3ff; font-weight:bold; font-size:18px;">Connecting to lobby...</p>
+            <p id="lobby-players" style="font-size:14px; color:#aaa; margin:8px 0;">Players in lobby: 0</p>
+            <button id="lobby-start-btn" class="menu-btn" style="background:#ffd700; display:none;" onclick="voteStartMultiplayer()">READY / CLICK TO START</button>
         </div>
         <div id="controls-hint" style="margin-top: 20px; font-size: 13px; color: #aaa;">
             <p><b>W, A, S, D</b> - Move | <b>Spacebar</b> - Jump | <b>Mouse</b> - Look & Aim</p>
@@ -147,6 +153,11 @@
         const camModeText = document.getElementById('cam-mode-text');
         const crosshairEl = document.getElementById('crosshair');
         const lanStatusEl = document.getElementById('lan-status');
+        const lobbyContainer = document.getElementById('lobby-container');
+        const lobbyStatusEl = document.getElementById('lobby-status');
+        const lobbyPlayersEl = document.getElementById('lobby-players');
+        const lobbyStartBtn = document.getElementById('lobby-start-btn');
+        const menuButtons = document.getElementById('menu-buttons');
 
         function resize() {
             canvas.width = Math.min(window.innerWidth, 1920);
@@ -159,6 +170,15 @@
         let isMultiplayer = false;
         let remotePlayers = {};
         let playerName = 'Survivor_' + Math.floor(Math.random() * 100);
+        let matchStarted = false;
+
+        function selectMultiplayer() {
+            isMultiplayer = true;
+            menuButtons.style.display = 'none';
+            lobbyContainer.style.display = 'block';
+            lobbyStatusEl.innerText = "Connecting to Cloud Server...";
+            initCloudWebSocket();
+        }
 
         function initCloudWebSocket() {
             try {
@@ -166,8 +186,8 @@
 
                 ws.onopen = () => {
                     console.log("Connected to Cloud Multiplayer Server!");
-                    lanStatusEl.innerText = "ONLINE (CLOUD)";
-                    lanStatusEl.style.color = "#33ff33";
+                    lanStatusEl.innerText = "ONLINE (LOBBY)";
+                    lanStatusEl.style.color = "#00c3ff";
                     ws.send(JSON.stringify({ type: 'JOIN', name: playerName }));
                 };
 
@@ -175,12 +195,27 @@
                     let data = JSON.parse(event.data);
                     if (data.type === 'STATE') {
                         remotePlayers = data.players || {};
+                        let count = Object.keys(remotePlayers).length;
+                        lobbyPlayersEl.innerText = `Players in lobby/room: ${count}`;
+
+                        if (count < 2) {
+                            lobbyStatusEl.innerText = "Waiting for another player to join...";
+                            lobbyStartBtn.style.display = 'none';
+                        } else {
+                            lobbyStatusEl.innerText = "Players ready! Click Start when all players agree.";
+                            lobbyStartBtn.style.display = 'inline-block';
+                        }
+
+                        if (data.matchStarted && !playing) {
+                            beginMultiplayerGame();
+                        }
                     }
                 };
 
                 ws.onerror = (err) => {
                     console.warn("WebSocket error or server offline.", err);
                     lanStatusEl.innerText = "OFFLINE (SERVER ERROR)";
+                    lobbyStatusEl.innerText = "Connection failed. Try Solo Mode.";
                 };
 
                 ws.onclose = () => {
@@ -190,6 +225,27 @@
             } catch(e) {
                 console.error("Failed to establish cloud connection", e);
             }
+        }
+
+        function voteStartMultiplayer() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'VOTE_START' }));
+                lobbyStartBtn.innerText = "WAITING FOR OTHERS TO CLICK...";
+                lobbyStartBtn.disabled = true;
+            }
+        }
+
+        function startSoloMode() {
+            isMultiplayer = false;
+            lanStatusEl.innerText = "OFFLINE (SOLO)";
+            lanStatusEl.style.color = "#ff3333";
+            startGameMode();
+        }
+
+        function beginMultiplayerGame() {
+            lanStatusEl.innerText = "ONLINE (CLOUD)";
+            lanStatusEl.style.color = "#33ff33";
+            startGameMode();
         }
 
         const WEAPONS = {
@@ -291,15 +347,8 @@
 
         let map = normalMap;
 
-        function startGameMode(mode) {
+        function startGameMode() {
             document.exitPointerLock();
-            isMultiplayer = (mode === 'multi');
-            if (isMultiplayer) {
-                initCloudWebSocket();
-            } else {
-                lanStatusEl.innerText = "OFFLINE (SOLO)";
-                lanStatusEl.style.color = "#ff3333";
-            }
             resetGame();
             playing = true;
             overlay.style.display = 'none';
