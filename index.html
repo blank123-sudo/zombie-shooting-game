@@ -1,120 +1,997 @@
-const WebSocket = require('ws');
-const http = require('http');
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Zombie Survival - Custom Rooms Multiplayer</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { background: #000; overflow: hidden; font-family: 'Courier New', Courier, monospace; user-select: none; }
+        canvas { display: block; width: 100vw; height: 100vh; max-width: 1920px; margin: 0 auto; }
+        
+        #hud {
+            position: absolute; top: 20px; left: 20px; color: #33ff33;
+            font-size: 20px; font-weight: bold; text-shadow: 0 0 8px #00ff00; pointer-events: none;
+            z-index: 10;
+        }
+        #money-display { color: #ffd700; text-shadow: 0 0 8px #ffaa00; }
+        
+        #ads-indicator {
+            position: absolute; bottom: 20px; left: 20px; color: #33ff33;
+            font-size: 15px; font-weight: bold; text-shadow: 0 0 6px #00ff00; pointer-events: none;
+            z-index: 10;
+        }
+        #wave-banner {
+            position: absolute; top: 20%; left: 50%; transform: translate(-50%, -50%);
+            color: #ff3333; font-size: 36px; font-weight: bold; text-shadow: 0 0 10px #ff0000;
+            display: none; pointer-events: none; text-align: center; z-index: 10;
+        }
 
-const server = http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Zombie Survival Multiplayer Room Server is Running\n');
-});
+        #boss-banner {
+            position: absolute; top: 12%; left: 50%; transform: translate(-50%, -50%);
+            color: #ff0055; font-size: 42px; font-weight: bold; text-shadow: 0 0 15px #ff0000;
+            display: none; pointer-events: none; text-align: center; z-index: 10;
+            animation: pulseBanner 0.8s infinite alternate;
+        }
+        @keyframes pulseBanner {
+            0% { transform: translate(-50%, -50%) scale(1); text-shadow: 0 0 10px #ff0000; }
+            100% { transform: translate(-50%, -50%) scale(1.08); text-shadow: 0 0 25px #ff0055; }
+        }
+        
+        #crosshair {
+            position: absolute; top: 50%; left: 50%; width: 12px; height: 12px;
+            transform: translate(-50%, -50%); pointer-events: none;
+            transition: opacity 0.1s ease; z-index: 10;
+        }
+        #crosshair::before, #crosshair::after {
+            content: ''; position: absolute; background: rgba(51, 255, 51, 0.9);
+        }
+        #crosshair::before { top: 5px; left: -10px; width: 32px; height: 2px; }
+        #crosshair::after { top: -10px; left: 5px; width: 2px; height: 32px; }
 
-const wss = new WebSocket.Server({ server });
+        #overlay, #shop-menu {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.92); color: #33ff33; display: flex;
+            flex-direction: column; justify-content: center; align-items: center;
+            text-align: center; z-index: 100; pointer-events: auto;
+        }
+        #overlay h1, #shop-menu h2 { font-size: 42px; margin-bottom: 10px; color: #ff2222; text-shadow: 0 0 12px #ff0000; }
+        #overlay p { font-size: 16px; color: #ccc; margin: 4px 0; }
+        
+        .menu-btn {
+            background: #33ff33; color: #000; border: none; padding: 12px 30px;
+            font-size: 18px; font-weight: bold; font-family: inherit; cursor: pointer;
+            border-radius: 5px; margin: 10px; transition: background 0.2s; box-shadow: 0 0 10px rgba(0,255,0,0.4);
+            z-index: 101; position: relative;
+        }
+        .menu-btn:hover { background: #22cc22; }
+        .menu-btn.multi { background: #00c3ff; box-shadow: 0 0 10px rgba(0,195,255,0.4); }
+        .menu-btn.multi:hover { background: #0099cc; }
+        .menu-btn:disabled { background: #444; color: #888; cursor: not-allowed; box-shadow: none; }
 
-// Rooms map: roomId -> { players: { id: { ws, x, y, angle, hp, wave, name } }, matchStarted: false, hostId: null }
-const rooms = {};
+        .room-input {
+            padding: 10px; font-size: 16px; font-family: inherit; background: #111; color: #33ff33;
+            border: 2px solid #00c3ff; border-radius: 4px; text-align: center; margin: 8px; outline: none;
+            text-transform: uppercase;
+        }
 
-wss.on('connection', (ws) => {
-    let currentRoomId = null;
-    let playerId = 'player_' + Math.random().toString(36.substring(2, 9));
+        #shop-menu { display: none; padding: 20px; z-index: 100; }
+        .shop-container {
+            display: flex; gap: 15px; flex-wrap: wrap; justify-content: center;
+            max-width: 900px; margin-top: 15px;
+        }
+        .shop-card {
+            background: #111411; border: 2px solid #33ff33; border-radius: 8px;
+            padding: 15px; width: 250px; text-align: left; box-shadow: 0 0 10px rgba(0,255,0,0.2);
+            display: flex; flex-direction: column; justify-content: space-between;
+        }
+        .shop-card h3 { color: #ffd700; margin-bottom: 5px; font-size: 20px; }
+        .shop-card p { font-size: 13px; color: #ccc; margin-bottom: 10px; line-height: 1.3; }
+        .shop-card .price { font-weight: bold; color: #33ff33; margin-bottom: 10px; }
+        .shop-btn {
+            background: #33ff33; color: #000; border: none; padding: 8px 12px;
+            font-weight: bold; font-family: inherit; cursor: pointer; border-radius: 4px;
+            transition: background 0.2s; text-align: center; width: 100%;
+        }
+        .shop-btn:hover { background: #22cc22; }
+        .shop-btn.owned { background: #445544; color: #888; cursor: default; }
+        .shop-btn.equip { background: #ffaa00; color: #000; }
+        .shop-btn.equip:hover { background: #cc8800; }
+        .close-shop-btn {
+            margin-top: 25px; padding: 10px 30px; font-size: 18px; background: #ff3333; color: #fff;
+            border: none; cursor: pointer; border-radius: 5px; font-family: inherit; font-weight: bold;
+        }
+        .close-shop-btn:hover { background: #cc2222; }
+    </style>
+</head>
+<body>
 
-    ws.on('message', (message) => {
-        try {
-            let data = JSON.parse(message);
+    <div id="hud">
+        WAVE: <span id="wave">1</span> | HP: <span id="hp">100</span>% | SCORE: <span id="score">0</span> | CASH: <span id="money-display">$0</span> | WEAPON: <span id="weapon-name" style="color:#ffd700;">PISTOL</span> | AMMO: <span id="ammo">12</span>/<span id="reserve-ammo">60</span> <span id="reloading-text" style="color: #ff3333; display: none;">[RELOADING...]</span>
+    </div>
+    <div id="ads-indicator">STATUS: <span id="lan-status" style="color: #ff3333;">OFFLINE (SOLO)</span> | CAM: <span id="cam-mode-text">1ST PERSON (C)</span> | <b>[B/TAB]</b> Shop (2026)</div>
+    <div id="wave-banner">WAVE CLEARED!<br><span style="font-size: 20px; color: #fff;">NEXT WAVE INCOMING...</span></div>
+    <div id="boss-banner">WARNING: BOSS WAVE IMMINENT!</div>
+    
+    <div id="crosshair"></div>
 
-            if (data.type === 'CREATE_ROOM' || data.type === 'JOIN_ROOM') {
-                let roomId = (data.roomId || '').trim().toUpperCase();
-                if (!roomId) return;
+    <div id="overlay">
+        <h1 id="title">SURVIVAL 3D: HORROR</h1>
+        <p id="sub">Select Game Mode or Enter Custom Room</p>
+        <br>
+        <div id="menu-buttons">
+            <button class="menu-btn" onclick="startSoloMode()">SOLO PLAY (OFFLINE)</button>
+            <button class="menu-btn multi" onclick="showRoomMenu()">MULTIPLAYER (CUSTOM ROOMS)</button>
+        </div>
 
-                // Leave previous room if any
-                if (currentRoomId && rooms[currentRoomId]) {
-                    delete rooms[currentRoomId].players[playerId];
-                    if (Object.keys(rooms[currentRoomId].players).length === 0) {
-                        delete rooms[currentRoomId];
-                    } else if (rooms[currentRoomId].hostId === playerId) {
-                        rooms[currentRoomId].hostId = Object.keys(rooms[currentRoomId].players)[0];
-                    }
-                    broadcastRoomState(currentRoomId);
-                }
+        <div id="room-menu-container" style="display:none; margin-top:10px;">
+            <p style="color:#00c3ff; font-weight:bold; margin-bottom:5px;">CREATE OR JOIN ROOM</p>
+            <input type="text" id="room-code-input" class="room-input" placeholder="ENTER ROOM CODE" maxlength="8"><br>
+            <button class="menu-btn multi" onclick="joinCustomRoom()">JOIN / CREATE ROOM</button>
+            <br>
+            <button class="menu-btn" style="background:#555; color:#fff; font-size:14px; padding:8px 15px;" onclick="backToMainMenu()">BACK</button>
+        </div>
 
-                currentRoomId = roomId;
-                if (!rooms[currentRoomId]) {
-                    rooms[currentRoomId] = {
-                        players: {},
-                        matchStarted: false,
-                        hostId: playerId
-                    };
-                }
+        <div id="lobby-container" style="display:none; margin-top:15px;">
+            <p id="lobby-status" style="color:#00c3ff; font-weight:bold; font-size:18px;">Connected to Room</p>
+            <p id="lobby-room-display" style="color:#ffd700; font-size:16px; margin:4px 0;"></p>
+            <p id="lobby-players" style="font-size:14px; color:#aaa; margin:8px 0;">Players in room: 0</p>
+            <button id="lobby-start-btn" class="menu-btn" style="background:#ffd700; display:none;" onclick="hostStartMatch()">START MATCH (HOST)</button>
+            <p id="host-wait-msg" style="color:#ffaa00; font-size:13px; margin-top:8px; display:none;">Waiting for host to start the match...</p>
+        </div>
 
-                rooms[currentRoomId].players[playerId] = {
-                    id: playerId,
-                    name: data.name || 'Survivor',
-                    x: 8, y: 12, angle: 0, hp: 100, wave: 1
+        <div id="controls-hint" style="margin-top: 20px; font-size: 13px; color: #aaa;">
+            <p><b>W, A, S, D</b> - Move | <b>Spacebar</b> - Jump | <b>Mouse</b> - Look & Aim</p>
+            <p><b>Left Click</b> - Shoot | <b>Right Click / Shift</b> - Scope / ADS | <b>C</b> - Cam View</p>
+        </div>
+    </div>
+
+    <div id="shop-menu">
+        <h2>WEAPON SHOP & INVENTORY</h2>
+        <p style="color:#ffd700; font-size:20px;">YOUR CASH: <span id="shop-cash">$0</span></p>
+        <div class="shop-container" id="shop-items"></div>
+        <button class="close-shop-btn" onclick="toggleShop(false)">RETURN TO GAME</button>
+    </div>
+
+    <canvas id="game"></canvas>
+
+    <script>
+        const canvas = document.getElementById('game');
+        const ctx = canvas.getContext('2d');
+        const overlay = document.getElementById('overlay');
+        const shopMenu = document.getElementById('shop-menu');
+        const waveBanner = document.getElementById('wave-banner');
+        const bossBanner = document.getElementById('boss-banner');
+        const reloadingText = document.getElementById('reloading-text');
+        const camModeText = document.getElementById('cam-mode-text');
+        const crosshairEl = document.getElementById('crosshair');
+        const lanStatusEl = document.getElementById('lan-status');
+        
+        const menuButtons = document.getElementById('menu-buttons');
+        const roomMenuContainer = document.getElementById('room-menu-container');
+        const roomCodeInput = document.getElementById('room-code-input');
+        const lobbyContainer = document.getElementById('lobby-container');
+        const lobbyStatusEl = document.getElementById('lobby-status');
+        const lobbyRoomDisplay = document.getElementById('lobby-room-display');
+        const lobbyPlayersEl = document.getElementById('lobby-players');
+        const lobbyStartBtn = document.getElementById('lobby-start-btn');
+        const hostWaitMsg = document.getElementById('host-wait-msg');
+
+        function resize() {
+            canvas.width = Math.min(window.innerWidth, 1920);
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        let ws = null;
+        let isMultiplayer = false;
+        let remotePlayers = {};
+        let playerName = 'Survivor_' + Math.floor(Math.random() * 100);
+        let currentRoomId = '';
+        let isHost = false;
+
+        function showRoomMenu() {
+            menuButtons.style.display = 'none';
+            roomMenuContainer.style.display = 'block';
+        }
+
+        function backToMainMenu() {
+            roomMenuContainer.style.display = 'none';
+            menuButtons.style.display = 'block';
+        }
+
+        function joinCustomRoom() {
+            let code = roomCodeInput.value.trim().toUpperCase();
+            if (!code) {
+                alert("Please enter a valid room code!");
+                return;
+            }
+            currentRoomId = code;
+            roomMenuContainer.style.display = 'none';
+            lobbyContainer.style.display = 'block';
+            lobbyStatusEl.innerText = "Connecting to room...";
+            initCloudWebSocket(code);
+        }
+
+        function initCloudWebSocket(roomId) {
+            try {
+                ws = new WebSocket('wss://zombie-game-server-rvpa.onrender.com');
+
+                ws.onopen = () => {
+                    console.log("Connected to Multiplayer Server!");
+                    lanStatusEl.innerText = "ONLINE (ROOM: " + roomId + ")";
+                    lanStatusEl.style.color = "#00c3ff";
+                    ws.send(JSON.stringify({ type: 'JOIN_ROOM', roomId: roomId, name: playerName }));
                 };
 
-                // If host left or room was empty, ensure host is set correctly
-                if (!rooms[currentRoomId].hostId) {
-                    rooms[currentRoomId].hostId = playerId;
+                ws.onmessage = (event) => {
+                    let data = JSON.parse(event.data);
+                    if (data.type === 'STATE') {
+                        remotePlayers = data.players || {};
+                        let count = Object.keys(remotePlayers).length;
+                        
+                        // Check if current user is the host
+                        isHost = (data.hostId && remotePlayers[Object.keys(remotePlayers).find(k => remotePlayers[k].id === data.hostId)] === remotePlayers[socketPlayerId(data.players)]);
+                        // Alternatively track host via ID comparison
+                        let myId = Object.keys(remotePlayers).find(k => remotePlayers[k].name === playerName); 
+                        // Simplified host check based on server data structure:
+                        isHost = (data.hostId && data.players[data.hostId] && data.players[data.hostId].name === playerName);
+
+                        lobbyRoomDisplay.innerText = `Room Code: ${roomId}`;
+                        lobbyPlayersEl.innerText = `Players in room: ${count}`;
+
+                        if (isHost) {
+                            lobbyStartBtn.style.display = 'inline-block';
+                            hostWaitMsg.style.display = 'none';
+                            lobbyStatusEl.innerText = "You are the Room Host.";
+                        } else {
+                            lobbyStartBtn.style.display = 'none';
+                            hostWaitMsg.style.display = 'block';
+                            lobbyStatusEl.innerText = "Joined room successfully.";
+                        }
+
+                        if (data.matchStarted && !playing) {
+                            beginMultiplayerGame();
+                        }
+                    }
+                };
+
+                ws.onerror = (err) => {
+                    console.warn("WebSocket error or server offline.", err);
+                    lanStatusEl.innerText = "OFFLINE (SERVER ERROR)";
+                    lobbyStatusEl.innerText = "Connection failed. Try Solo Mode.";
+                };
+
+                ws.onclose = () => {
+                    lanStatusEl.innerText = "DISCONNECTED";
+                    lanStatusEl.style.color = "#ff3333";
+                };
+            } catch(e) {
+                console.error("Failed to establish cloud connection", e);
+            }
+        }
+
+        function socketPlayerId(playersObj) {
+            return Object.keys(playersObj)[0];
+        }
+
+        function hostStartMatch() {
+            if (ws && ws.readyState === WebSocket.OPEN && isHost) {
+                ws.send(JSON.stringify({ type: 'START_MATCH' }));
+            }
+        }
+
+        function startSoloMode() {
+            isMultiplayer = false;
+            lanStatusEl.innerText = "OFFLINE (SOLO)";
+            lanStatusEl.style.color = "#ff3333";
+            startGameMode();
+        }
+
+        function beginMultiplayerGame() {
+            lanStatusEl.innerText = "ONLINE (ROOM: " + currentRoomId + ")";
+            lanStatusEl.style.color = "#33ff33";
+            startGameMode();
+        }
+
+        const WEAPONS = {
+            pistol: { name: 'Pistol', price: 0, ammoPrice: 20, ammoPack: 24, maxMag: 12, maxReserve: 120, damage: 1, fireRate: 0.25, isAuto: false, spread: 0.005, pellets: 1, zoomFovFactor: 0.5, color: '#3a3d45', desc: 'Standard semi-automatic sidearm.' },
+            shotgun: { name: 'Shotgun', price: 300, ammoPrice: 50, ammoPack: 16, maxMag: 6, maxReserve: 48, damage: 1.2, fireRate: 0.7, isAuto: false, spread: 0.05, pellets: 6, zoomFovFactor: 0.6, color: '#6e4726', desc: 'Fires heavy spread pellets. Devastating close up.' },
+            rifle: { name: 'Assault Rifle', price: 600, ammoPrice: 75, ammoPack: 60, maxMag: 30, maxReserve: 180, damage: 1.1, fireRate: 0.1, isAuto: true, spread: 0.015, pellets: 1, zoomFovFactor: 0.45, color: '#2b3323', desc: 'Fully automatic tactical rifle with rapid fire.' },
+            sniper: { name: 'Sniper Rifle', price: 1000, ammoPrice: 100, ammoPack: 10, maxMag: 5, maxReserve: 30, damage: 10, fireRate: 1.1, isAuto: false, spread: 0.000, pellets: 1, zoomFovFactor: 0.2, color: '#1a1d24', desc: 'One-shot kill caliber. Extreme zoom accuracy.' },
+            plasma: { name: 'Plasma Cannon', price: 1500, ammoPrice: 150, ammoPack: 40, maxMag: 20, maxReserve: 100, damage: 3, fireRate: 0.18, isAuto: true, spread: 0.008, pellets: 1, zoomFovFactor: 0.4, color: '#00c3ff', desc: 'High-tech energy gun firing intense plasma pulses.' }
+        };
+
+        let inventory = { pistol: true, shotgun: false, rifle: false, sniper: false, plasma: false };
+        let ammoState = {
+            pistol: { mag: 12, reserve: 60 }, shotgun: { mag: 6, reserve: 24 },
+            rifle: { mag: 30, reserve: 120 }, sniper: { mag: 5, reserve: 15 }, plasma: { mag: 20, reserve: 60 }
+        };
+        let currentWeaponKey = 'pistol';
+        let cameraMode = 1;
+
+        let playing = false, inShop = false;
+        let hp = 100, score = 0, playerMoney = 150;
+        let isReloading = false, reloadProgress = 0; 
+        let currentWave = 1, waveZombiesToSpawn = 0, isWaveTransitioning = false, respawnCooldown = 0;
+        let isBossWave = false;
+
+        let muzzleFlashTimer = 0, gunRecoilY = 0, gunOffsetY = 0;
+        let isScopedMode = false, zoomFactor = 0;
+        let lastShootTime = 0, isMouseDown = false;
+        let bulletParticles = [], ejectedCasings = [];
+
+        let px = 8, py = 12, pAngle = -Math.PI / 2, pPitch = 0, pHeight = 0, pVelY = 0, isGrounded = true;
+        const GRAVITY = -18, JUMP_FORCE = 6.5;
+
+        let keys = {};
+        let zombies = [], wallDepths = [];
+        const SINGLE_SPAWN_POINT = { x: 8.5, y: 2.5 };
+        const BASE_FOV = Math.PI / 3, NUM_RAYS = 200;
+        const MAP_SIZE = 16;
+        
+        const normalMap = [
+            1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+            1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+            1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+            1,0,0,2,2,0,0,0,0,0,2,2,0,0,0,1,
+            1,0,0,2,2,0,0,0,0,0,2,2,0,0,0,1,
+            1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+            1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+            1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+            1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+            1,0,0,2,2,0,0,0,0,0,2,2,0,0,0,1,
+            1,0,0,2,2,0,0,0,0,0,2,2,0,0,0,1,
+            1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+            1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+            1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+            1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,
+            1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1
+        ];
+
+        const bossMap = [
+            2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+            2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,
+            2,0,1,1,0,0,1,1,1,1,0,0,1,1,0,2,
+            2,0,1,1,0,0,0,0,0,0,0,0,1,1,0,2,
+            2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,
+            2,0,0,0,0,2,2,0,0,2,2,0,0,0,0,2,
+            2,0,0,0,0,2,2,0,0,2,2,0,0,0,0,2,
+            2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,
+            2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,
+            2,0,0,0,0,2,2,0,0,2,2,0,0,0,0,2,
+            2,0,0,0,0,2,2,0,0,2,2,0,0,0,0,2,
+            2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,
+            2,0,1,1,0,0,0,0,0,0,0,0,1,1,0,2,
+            2,0,1,1,0,0,1,1,1,1,0,0,1,1,0,2,
+            2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,
+            2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2
+        ];
+
+        let map = normalMap;
+
+        function startGameMode() {
+            document.exitPointerLock();
+            resetGame();
+            playing = true;
+            overlay.style.display = 'none';
+            setTimeout(() => { document.body.requestPointerLock(); }, 100);
+        }
+
+        function resetGame() {
+            px = 8; py = 12; pAngle = -Math.PI / 2; pPitch = 0;
+            pHeight = 0; pVelY = 0; isGrounded = true;
+            hp = 100; score = 0; playerMoney = 150;
+            inventory = { pistol: true, shotgun: false, rifle: false, sniper: false, plasma: false };
+            ammoState = {
+                pistol: { mag: 12, reserve: 60 }, shotgun: { mag: 6, reserve: 24 },
+                rifle: { mag: 30, reserve: 120 }, sniper: { mag: 5, reserve: 15 }, plasma: { mag: 20, reserve: 60 }
+            };
+            currentWeaponKey = 'pistol';
+            isReloading = false; reloadProgress = 0; isScopedMode = false;
+            crosshairEl.style.opacity = '1'; reloadingText.style.display = 'none';
+            currentWave = 1; zombies = []; bulletParticles = []; ejectedCasings = [];
+            startWave(1); updateHUD();
+        }
+
+        function startWave(waveNum) {
+            currentWave = waveNum;
+            isBossWave = (currentWave % 5 === 0);
+            map = isBossWave ? bossMap : normalMap;
+
+            if (isBossWave) {
+                bossBanner.style.display = 'block';
+                setTimeout(() => { bossBanner.style.display = 'none'; }, 4000);
+                waveZombiesToSpawn = 1;
+            } else {
+                waveZombiesToSpawn = 4 + waveNum * 2;
+            }
+
+            isWaveTransitioning = false;
+            waveBanner.style.display = 'none';
+            updateHUD();
+        }
+
+        function switchWeapon(key) {
+            if (!inventory[key] || currentWeaponKey === key) return;
+            currentWeaponKey = key;
+            isReloading = false;
+            reloadProgress = 0;
+            reloadingText.style.display = 'none';
+            updateHUD();
+        }
+
+        function toggleShop(open) {
+            inShop = open;
+            if (open) {
+                document.exitPointerLock();
+                renderShopUI();
+                shopMenu.style.display = 'flex';
+            } else {
+                shopMenu.style.display = 'none';
+                if (playing) {
+                    setTimeout(() => { document.body.requestPointerLock(); }, 100);
+                }
+            }
+        }
+
+        function toggleCameraMode() {
+            cameraMode = cameraMode === 1 ? 3 : 1;
+            camModeText.innerText = `${cameraMode === 1 ? '1ST PERSON' : '3RD PERSON'} (C)`;
+            if (cameraMode === 3) { isScopedMode = false; zoomFactor = 0; crosshairEl.style.opacity = '1'; }
+        }
+
+        function renderShopUI() {
+            document.getElementById('shop-cash').innerText = `$${playerMoney}`;
+            const container = document.getElementById('shop-items');
+            container.innerHTML = '';
+
+            Object.keys(WEAPONS).forEach(key => {
+                const w = WEAPONS[key];
+                const owned = inventory[key];
+                const isEquipped = currentWeaponKey === key;
+
+                let card = document.createElement('div');
+                card.className = 'shop-card';
+                card.innerHTML = `
+                    <div>
+                        <h3>${w.name} ${isEquipped ? '<span style="font-size:12px; color:#33ff33;">(EQUIPPED)</span>' : ''}</h3>
+                        <p>${w.desc}</p>
+                        <p class="price">Damage: ${w.damage} | Mag: ${w.maxMag}</p>
+                    </div>
+                    <div>
+                        ${!owned 
+                            ? `<button class="shop-btn" onclick="buyWeapon('${key}')">BUY GUN ($${w.price})</button>`
+                            : isEquipped 
+                                ? `<button class="shop-btn owned">EQUIPPED</button>`
+                                : `<button class="shop-btn equip" onclick="switchWeapon('${key}'); renderShopUI();">EQUIP</button>`
+                        }
+                        <button class="shop-btn" style="margin-top:6px; background:#112211; color:#33ff33; border:1px solid #33ff33;" 
+                                onclick="buyAmmo('${key}')">+AMMO (${w.ammoPack} rounds - $${w.ammoPrice})</button>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        function buyWeapon(key) {
+            const w = WEAPONS[key];
+            if (playerMoney >= w.price) {
+                playerMoney -= w.price;
+                inventory[key] = true;
+                switchWeapon(key);
+                renderShopUI();
+                updateHUD();
+            }
+        }
+
+        function buyAmmo(key) {
+            const w = WEAPONS[key];
+            if (playerMoney >= w.ammoPrice) {
+                if (ammoState[key].reserve < w.maxReserve) {
+                    playerMoney -= w.ammoPrice;
+                    ammoState[key].reserve = Math.min(w.maxReserve, ammoState[key].reserve + w.ammoPack);
+                    renderShopUI();
+                    updateHUD();
+                }
+            }
+        }
+
+        function getNewWanderTarget() {
+            let tx, ty;
+            do {
+                tx = Math.floor(Math.random() * (MAP_SIZE - 2)) + 1 + 0.5;
+                ty = Math.floor(Math.random() * (MAP_SIZE - 2)) + 1 + 0.5;
+            } while (map[Math.floor(ty) * MAP_SIZE + Math.floor(tx)] !== 0);
+            return { x: tx, y: ty };
+        }
+
+        function spawnZombieAtSinglePoint() {
+            if (isBossWave) {
+                let bossHp = 80 + (currentWave * 15);
+                zombies.push({
+                    x: SINGLE_SPAWN_POINT.x, y: SINGLE_SPAWN_POINT.y, hp: bossHp, maxHp: bossHp,
+                    animTimer: 0, hitTimer: 0, isAggro: true, speed: 1.1, isBoss: true,
+                    wanderTarget: getNewWanderTarget()
+                });
+            } else {
+                let maxHp = 2 + Math.floor(currentWave / 2);
+                let speed = 0.8 + (currentWave * 0.05);
+                zombies.push({
+                    x: SINGLE_SPAWN_POINT.x, y: SINGLE_SPAWN_POINT.y, hp: maxHp, maxHp: maxHp,
+                    animTimer: Math.random() * 10, hitTimer: 0, isAggro: false, speed: speed, isBoss: false,
+                    wanderTarget: getNewWanderTarget()
+                });
+            }
+        }
+
+        function hasLineOfSight(x1, y1, x2, y2) {
+            let dist = Math.hypot(x2 - x1, y2 - y1);
+            let steps = dist * 10, dx = (x2 - x1) / steps, dy = (y2 - y1) / steps;
+            let cx = x1, cy = y1;
+            for (let i = 0; i < steps; i++) {
+                cx += dx; cy += dy;
+                if (map[Math.floor(cy) * MAP_SIZE + Math.floor(cx)] > 0) return false;
+            }
+            return true;
+        }
+
+        function createHitParticles(screenX, screenY, color) {
+            for (let i = 0; i < 12; i++) {
+                let angle = Math.random() * Math.PI * 2;
+                let speed = 50 + Math.random() * 150;
+                bulletParticles.push({
+                    x: screenX, y: screenY, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+                    life: 0.25, maxLife: 0.25, color: color, size: 2 + Math.random() * 3
+                });
+            }
+        }
+
+        function spawnEjectedCasing(startX, startY) {
+            let angle = -Math.PI / 4 + (Math.random() * 0.2 - 0.1);
+            let speed = 300 + Math.random() * 120;
+            ejectedCasings.push({
+                x: startX, y: startY, vx: Math.cos(angle) * speed + 150, vy: Math.sin(angle) * speed - 100,
+                rotation: Math.random() * Math.PI * 2, vRot: (Math.random() - 0.5) * 25,
+                gravity: 950, life: 0.8, maxLife: 0.8
+            });
+        }
+
+        function startReloading() {
+            const curAmmo = ammoState[currentWeaponKey];
+            const w = WEAPONS[currentWeaponKey];
+            if (isReloading || curAmmo.mag >= w.maxMag || curAmmo.reserve <= 0) return;
+            isReloading = true;
+            reloadProgress = 0;
+            reloadingText.style.display = 'inline';
+        }
+
+        function updateHUD() {
+            document.getElementById('wave').innerText = currentWave + (isBossWave ? ' [BOSS]' : '');
+            document.getElementById('hp').innerText = Math.max(0, Math.round(hp));
+            document.getElementById('score').innerText = score;
+            document.getElementById('money-display').innerText = `$${playerMoney}`;
+            document.getElementById('weapon-name').innerText = WEAPONS[currentWeaponKey].name.toUpperCase();
+            document.getElementById('ammo').innerText = ammoState[currentWeaponKey].mag;
+            document.getElementById('reserve-ammo').innerText = ammoState[currentWeaponKey].reserve;
+        }
+
+        function fireWeapon() {
+            const w = WEAPONS[currentWeaponKey];
+            const curAmmo = ammoState[currentWeaponKey];
+
+            if (curAmmo.mag <= 0 || isReloading) {
+                if (curAmmo.mag === 0) startReloading();
+                return;
+            }
+
+            curAmmo.mag--;
+            updateHUD();
+
+            muzzleFlashTimer = 0.08;
+            gunRecoilY = currentWeaponKey === 'shotgun' ? 55 : 28;
+
+            let baseScale = (canvas.height / 600) * (1 + zoomFactor * 0.45);
+            spawnEjectedCasing((canvas.width / 2) + (55 * baseScale), canvas.height - (180 * baseScale));
+
+            let currentFOV = BASE_FOV - (BASE_FOV - (BASE_FOV * w.zoomFovFactor)) * zoomFactor;
+            let currentHalfFOV = currentFOV / 2;
+            let horizonY = (canvas.height / 2) + pPitch + (pHeight * 120);
+
+            for (let p = 0; p < w.pellets; p++) {
+                let spreadX = (Math.random() - 0.5) * w.spread * canvas.width;
+                let spreadY = (Math.random() - 0.5) * w.spread * canvas.height;
+                let aimX = (canvas.width / 2) + spreadX;
+                let aimY = (canvas.height / 2) + spreadY;
+
+                let hitZombie = null;
+                let sortedZombies = [...zombies].sort((a, b) => Math.hypot(a.x - px, a.y - py) - Math.hypot(b.x - px, b.y - py));
+
+                for (let z of sortedZombies) {
+                    let zdx = z.x - px, zdy = z.y - py;
+                    let dist = Math.hypot(zdx, zdy);
+                    let spriteAngle = Math.atan2(zdy, zdx) - pAngle;
+                    while (spriteAngle < -Math.PI) spriteAngle += Math.PI * 2;
+                    while (spriteAngle > Math.PI) spriteAngle -= Math.PI * 2;
+
+                    let correctedDist = dist * Math.cos(spriteAngle);
+                    if (dist > 0.3 && Math.abs(spriteAngle) < currentHalfFOV + 0.3) {
+                        let fovScale = BASE_FOV / currentFOV;
+                        let zScreenX = (canvas.width / 2) + Math.tan(spriteAngle) * (canvas.width / (2 * Math.tan(currentHalfFOV)));
+                        let spriteHeight = (canvas.height / correctedDist) * fovScale * (z.isBoss ? 2.2 : 1.0);
+                        let floorY = horizonY + spriteHeight / 2;
+                        let drawY = floorY - spriteHeight;
+                        let spriteWidth = spriteHeight * (z.isBoss ? 0.7 : 0.45);
+
+                        if (aimX >= zScreenX - spriteWidth / 2 && aimX <= zScreenX + spriteWidth / 2 && aimY >= drawY && aimY <= floorY) {
+                            let rayIdx = Math.floor((aimX / canvas.width) * NUM_RAYS);
+                            if (rayIdx >= 0 && rayIdx < NUM_RAYS && (wallDepths[rayIdx] + 0.05) >= correctedDist) {
+                                hitZombie = z;
+                                break;
+                            }
+                        }
+                    }
                 }
 
-                broadcastRoomState(currentRoomId);
-            }
+                if (hitZombie) {
+                    hitZombie.hp -= w.damage;
+                    hitZombie.hitTimer = 0.15;
+                    hitZombie.isAggro = true;
+                    createHitParticles(aimX, aimY, currentWeaponKey === 'plasma' ? '#00e1ff' : '#880000');
 
-            if (data.type === 'MOVE' && currentRoomId && rooms[currentRoomId]) {
-                let p = rooms[currentRoomId].players[playerId];
-                if (p) {
-                    p.x = data.x;
-                    p.y = data.y;
-                    p.angle = data.angle;
-                    p.hp = data.hp;
-                    p.wave = data.wave;
-                    broadcastRoomState(currentRoomId);
+                    if (hitZombie.hp <= 0) {
+                        playerMoney += (hitZombie.isBoss ? 500 : 25) * currentWave;
+                        score += (hitZombie.isBoss ? 1000 : 100) * currentWave;
+                        updateHUD();
+                    }
+                } else {
+                    createHitParticles(aimX, aimY, currentWeaponKey === 'plasma' ? '#00c3ff' : '#ffaa33');
                 }
             }
 
-            if (data.type === 'START_MATCH' && currentRoomId && rooms[currentRoomId]) {
-                // Only allow the designated host to start the match
-                if (rooms[currentRoomId].hostId === playerId) {
-                    rooms[currentRoomId].matchStarted = true;
-                    broadcastRoomState(currentRoomId);
+            if (curAmmo.mag === 0) startReloading();
+        }
+
+        window.addEventListener('contextmenu', e => e.preventDefault());
+
+        window.addEventListener('keydown', e => {
+            keys[e.code] = true;
+            if (e.code === 'KeyB' || e.code === 'Tab') {
+                e.preventDefault();
+                toggleShop(!inShop);
+            }
+            if (!inShop && playing) {
+                if (e.code === 'KeyC') toggleCameraMode();
+                if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') toggleScope();
+                if (e.code === 'Space' && isGrounded) { pVelY = JUMP_FORCE; isGrounded = false; }
+                if (e.code === 'KeyR') startReloading();
+                if (e.code === 'Digit1') switchWeapon('pistol');
+                if (e.code === 'Digit2') switchWeapon('shotgun');
+                if (e.code === 'Digit3') switchWeapon('rifle');
+                if (e.code === 'Digit4') switchWeapon('sniper');
+                if (e.code === 'Digit5') switchWeapon('plasma');
+            }
+        });
+        window.addEventListener('keyup', e => keys[e.code] = false);
+
+        document.addEventListener('mousemove', e => {
+            if (document.pointerLockElement === document.body && !inShop) {
+                let sensitivity = 0.0025 * (1 - zoomFactor * 0.5);
+                pAngle += e.movementX * sensitivity;
+                pPitch -= e.movementY * sensitivity * 180;
+                pPitch = Math.max(-canvas.height * 0.45, Math.min(canvas.height * 0.45, pPitch));
+            }
+        });
+
+        function toggleScope() {
+            if (cameraMode === 3) return;
+            isScopedMode = !isScopedMode;
+            crosshairEl.style.opacity = isScopedMode ? '0' : '1';
+        }
+
+        document.addEventListener('pointerlockchange', () => {
+            if (document.pointerLockElement !== document.body && playing && !inShop) {
+                overlay.style.display = 'flex';
+                document.getElementById('title').innerText = "PAUSED";
+                document.getElementById('sub').innerText = "Click buttons or resume to continue";
+            }
+        });
+
+        window.addEventListener('mousedown', e => {
+            if (document.pointerLockElement === document.body && !inShop) {
+                if (e.button === 2) { toggleScope(); return; }
+                if (e.button === 0) {
+                    isMouseDown = true;
+                    let now = performance.now() / 1000;
+                    if (now - lastShootTime >= WEAPONS[currentWeaponKey].fireRate) {
+                        fireWeapon();
+                        lastShootTime = now;
+                    }
                 }
             }
+        });
+        window.addEventListener('mouseup', e => { if (e.button === 0) isMouseDown = false; });
 
-        } catch (e) {
-            console.error("Error parsing message:", e);
+        function shade(hex, amt) {
+            let n = parseInt(hex.slice(1), 16);
+            let r = Math.min(255, Math.max(0, (n >> 16) + amt));
+            let g = Math.min(255, Math.max(0, ((n >> 8) & 0xff) + amt));
+            let b = Math.min(255, Math.max(0, (n & 0xff) + amt));
+            return `rgb(${r},${g},${b})`;
         }
-    });
+        function rr(ctx, x, y, w, h, r) {
+            ctx.beginPath();
+            ctx.moveTo(x + r, y);
+            ctx.arcTo(x + w, y, x + w, y + h, r);
+            ctx.arcTo(x + w, y + h, x, y + h, r);
+            ctx.arcTo(x, y + h, x, y, r);
+            ctx.arcTo(x, y, x + w, y, r);
+            ctx.closePath();
+        }
+        function metalGrad(ctx, x0, x1, y, baseHex, litHex, darkHex) {
+            let g = ctx.createLinearGradient(x0, y, x1, y);
+            g.addColorStop(0, darkHex); g.addColorStop(0.22, baseHex);
+            g.addColorStop(0.5, litHex); g.addColorStop(0.78, baseHex); g.addColorStop(1, darkHex);
+            return g;
+        }
 
-    ws.on('close', () => {
-        if (currentRoomId && rooms[currentRoomId]) {
-            delete rooms[currentRoomId].players[playerId];
-            if (Object.keys(rooms[currentRoomId].players).length === 0) {
-                delete rooms[currentRoomId];
-            } else if (rooms[currentRoomId].hostId === playerId) {
-                rooms[currentRoomId].hostId = Object.keys(rooms[currentRoomId].players)[0];
+        function drawGun(ctx) {
+            let centerX = canvas.width / 2;
+            let baseScale = (canvas.height / 600) * (1 + zoomFactor * 0.45);
+            let w = WEAPONS[currentWeaponKey];
+            let key = currentWeaponKey;
+
+            let reloadDipY = isReloading ? Math.sin(reloadProgress * Math.PI) * 110 * baseScale : 0;
+            let reloadTiltAngle = isReloading ? Math.sin(reloadProgress * Math.PI) * 0.18 : 0;
+            let baseY = (canvas.height + 20) - gunRecoilY + gunOffsetY + reloadDipY + (pHeight * 30);
+
+            ctx.save();
+            ctx.translate(centerX, baseY);
+            ctx.rotate(reloadTiltAngle);
+
+            let s = baseScale;
+            let metalDark = '#0a0a0c', metalBase = w.color, metalLit = shade(w.color, 70);
+
+            let bodyTop = -180 * s, bodyBot = 20 * s;
+            ctx.fillStyle = metalGrad(ctx, -65 * s, 65 * s, 0, metalBase, metalLit, metalDark);
+            ctx.beginPath();
+            ctx.moveTo(-60 * s, bodyBot); ctx.lineTo(-65 * s, -100 * s);
+            ctx.lineTo(-30 * s, bodyTop); ctx.lineTo(30 * s, bodyTop);
+            ctx.lineTo(65 * s, -100 * s); ctx.lineTo(60 * s, bodyBot);
+            ctx.closePath(); ctx.fill();
+
+            let barrelLen = key === 'sniper' ? 130 : (key === 'rifle' ? 90 : (key === 'shotgun' ? 70 : 25));
+            ctx.fillStyle = metalGrad(ctx, -12 * s, 12 * s, 0, '#1b1b1d', '#454549', '#050506');
+            rr(ctx, -11 * s, bodyTop - barrelLen * s, 22 * s, barrelLen * s, 4 * s); ctx.fill();
+
+            ctx.restore();
+            if (muzzleFlashTimer > 0 && !isReloading) {
+                ctx.save(); ctx.translate(centerX, baseY - 225 * baseScale);
+                let outerGrad = ctx.createRadialGradient(0, 0, 5, 0, 0, 100 * baseScale);
+                outerGrad.addColorStop(0, 'rgba(255, 255, 230, 0.95)');
+                outerGrad.addColorStop(0.3, 'rgba(255, 180, 40, 0.8)');
+                outerGrad.addColorStop(1, 'rgba(255, 0, 0, 0)');
+                ctx.fillStyle = outerGrad;
+                ctx.beginPath(); ctx.arc(0, 0, 100 * baseScale, 0, Math.PI * 2); ctx.fill();
+                ctx.restore();
             }
-            broadcastRoomState(currentRoomId);
         }
-    });
-});
 
-function broadcastRoomState(roomId) {
-    if (!rooms[roomId]) return;
-    let roomData = rooms[roomId];
-    let payload = JSON.stringify({
-        type: 'STATE',
-        matchStarted: roomData.matchStarted,
-        hostId: roomData.hostId,
-        players: roomData.players
-    });
+        const zombieCanvas = document.createElement('canvas');
+        zombieCanvas.width = 200; zombieCanvas.height = 200;
+        const zombieCtx = zombieCanvas.getContext('2d');
 
-    wss.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
-            // Find if this client belongs to this room
-            // A simple way is broadcasting to clients tracking this room context
-            client.send(payload);
+        function drawZombieSprite(offCtx, z, size) {
+            offCtx.clearRect(0, 0, size, size);
+            let cx = size / 2, cy = size / 2, scale = size / 100;
+            let isHit = z.hitTimer > 0;
+
+            offCtx.save();
+            let torsoGrad = isHit ? '#ff2222' : '#141c17';
+            offCtx.fillStyle = torsoGrad;
+            offCtx.fillRect(cx - 19 * scale, cy - 22 * scale, 38 * scale, 36 * scale);
+
+            let headY = cy - 38 * scale;
+            offCtx.fillStyle = isHit ? '#ff2222' : '#2b382d';
+            offCtx.fillRect(cx - 12 * scale, headY - 14 * scale, 24 * scale, 28 * scale);
+            offCtx.restore();
         }
-    });
-}
 
-const PORT = process.env.PORT || 10000;
-server.listen(PORT, () => {
-    console.log(`Server listening on port ${PORT}`);
-});
+        let lastTime = performance.now();
+        function loop(now) {
+            let dt = (now - lastTime) / 1000;
+            lastTime = now;
+
+            if (document.pointerLockElement === document.body && hp > 0 && !inShop) {
+                if (isMouseDown && WEAPONS[currentWeaponKey].isAuto) {
+                    let nowSec = now / 1000;
+                    if (nowSec - lastShootTime >= WEAPONS[currentWeaponKey].fireRate) {
+                        fireWeapon();
+                        lastShootTime = nowSec;
+                    }
+                }
+
+                if (isReloading) {
+                    reloadProgress += dt / 1.3;
+                    if (reloadProgress >= 1.0) {
+                        const curAmmo = ammoState[currentWeaponKey];
+                        const w = WEAPONS[currentWeaponKey];
+                        let needed = w.maxMag - curAmmo.mag;
+                        let loaded = Math.min(needed, curAmmo.reserve);
+                        curAmmo.mag += loaded; curAmmo.reserve -= loaded;
+                        isReloading = false; reloadProgress = 0;
+                        reloadingText.style.display = 'none';
+                        updateHUD();
+                    }
+                }
+
+                if (!isGrounded) {
+                    pVelY += GRAVITY * dt;
+                    pHeight += pVelY * dt;
+                    if (pHeight <= 0) { pHeight = 0; pVelY = 0; isGrounded = true; }
+                }
+
+                let targetFactor = (isScopedMode && cameraMode === 1) ? 1.0 : 0.0;
+                zoomFactor += (targetFactor - zoomFactor) * 12 * dt;
+
+                let speed = 2.5 * dt, dx = 0, dy = 0, isMoving = false;
+                if (keys['KeyW']) { dx += Math.cos(pAngle) * speed; dy += Math.sin(pAngle) * speed; isMoving = true; }
+                if (keys['KeyS']) { dx -= Math.cos(pAngle) * speed; dy -= Math.sin(pAngle) * speed; isMoving = true; }
+                if (keys['KeyA']) { dx += Math.sin(pAngle) * speed; dy -= Math.cos(pAngle) * speed; isMoving = true; }
+                if (keys['KeyD']) { dx -= Math.sin(pAngle) * speed; dy += Math.cos(pAngle) * speed; isMoving = true; }
+
+                if (map[Math.floor(py) * MAP_SIZE + Math.floor(px + dx * 2)] === 0) px += dx;
+                if (map[Math.floor(py + dy * 2) * MAP_SIZE + Math.floor(px)] === 0) py += dy;
+
+                if (isMultiplayer && ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({
+                        type: 'MOVE', x: px, y: py, angle: pAngle, hp: hp, wave: currentWave
+                    }));
+                }
+
+                gunOffsetY = isMoving ? Math.sin(now * 0.01) * 6 : Math.sin(now * 0.003) * 2;
+
+                if (waveZombiesToSpawn > 0) {
+                    respawnCooldown -= dt;
+                    if (respawnCooldown <= 0) {
+                        spawnZombieAtSinglePoint();
+                        waveZombiesToSpawn--;
+                        respawnCooldown = 2.0;
+                    }
+                }
+
+                if (waveZombiesToSpawn === 0 && zombies.length === 0 && !isWaveTransitioning) {
+                    isWaveTransitioning = true;
+                    waveBanner.style.display = 'block';
+                    setTimeout(() => startWave(currentWave + 1), 3500);
+                }
+
+                zombies.forEach((z) => {
+                    if (z.hitTimer > 0) z.hitTimer -= dt;
+                    let zdx = px - z.x, zdy = py - z.y;
+                    let distToPlayer = Math.hypot(zdx, zdy);
+                    if (!z.isAggro && distToPlayer < 7 && hasLineOfSight(px, py, z.x, z.y)) z.isAggro = true;
+                    z.animTimer += dt;
+
+                    if (z.isAggro) {
+                        let stopDist = z.isBoss ? 1.2 : 0.4;
+                        if (distToPlayer > stopDist) {
+                            let wobbleAngle = Math.atan2(zdy, zdx) + Math.sin(z.animTimer * 2.5) * 0.35;
+                            let moveX = Math.cos(wobbleAngle) * z.speed * dt;
+                            let moveY = Math.sin(wobbleAngle) * z.speed * dt;
+                            if (map[Math.floor(z.y) * MAP_SIZE + Math.floor(z.x + moveX * 2)] === 0) z.x += moveX;
+                            if (map[Math.floor(z.y + moveY * 2) * MAP_SIZE + Math.floor(z.x)] === 0) z.y += moveY;
+                        } else {
+                            hp -= (z.isBoss ? 40 : 20) * dt; updateHUD();
+                            if (hp <= 0) {
+                                document.exitPointerLock(); playing = false; overlay.style.display = 'flex';
+                                document.getElementById('title').innerText = "YOU DIED";
+                                document.getElementById('sub').innerText = `Survived Wave ${currentWave} | Cash: $${playerMoney}. Refresh to restart.`;
+                            }
+                        }
+                    }
+                });
+
+                zombies = zombies.filter(z => z.hp > 0);
+                if (gunRecoilY > 0) gunRecoilY -= 200 * dt;
+                if (gunRecoilY < 0) gunRecoilY = 0;
+                if (muzzleFlashTimer > 0) muzzleFlashTimer -= dt;
+            }
+
+            let currentFOV = BASE_FOV - (BASE_FOV - (BASE_FOV * WEAPONS[currentWeaponKey].zoomFovFactor)) * zoomFactor;
+            let currentHalfFOV = currentFOV / 2;
+            let horizonY = (canvas.height / 2) + pPitch + (pHeight * 120);
+
+            ctx.fillStyle = isBossWave ? '#200508' : '#050507'; ctx.fillRect(0, 0, canvas.width, horizonY);
+            ctx.fillStyle = isBossWave ? '#1a080c' : '#0d0d11'; ctx.fillRect(0, horizonY, canvas.width, canvas.height - horizonY);
+
+            const rayWidth = canvas.width / NUM_RAYS; wallDepths = [];
+            for (let i = 0; i < NUM_RAYS; i++) {
+                let rayAngle = (pAngle - currentHalfFOV) + (i / NUM_RAYS) * currentFOV;
+                let distance = 0, hitWall = false;
+                let cos = Math.cos(rayAngle), sin = Math.sin(rayAngle);
+
+                while (!hitWall && distance < 16) {
+                    distance += 0.03;
+                    let checkX = Math.floor(px + cos * distance);
+                    let checkY = Math.floor(py + sin * distance);
+                    if (checkX < 0 || checkX >= MAP_SIZE || checkY < 0 || checkY >= MAP_SIZE) hitWall = true;
+                    else if (map[checkY * MAP_SIZE + checkX] > 0) hitWall = true;
+                }
+
+                let correctedDist = distance * Math.cos(rayAngle - pAngle);
+                wallDepths[i] = correctedDist;
+                let wallHeight = Math.min(canvas.height * 2, (canvas.height / correctedDist) * (BASE_FOV / currentFOV));
+                let shadeVal = Math.max(0, 140 - correctedDist * 12);
+                
+                ctx.fillStyle = `rgb(${shadeVal * 0.3}, ${shadeVal * 0.35}, ${shadeVal * 0.3})`;
+                ctx.fillRect(i * rayWidth, horizonY - wallHeight / 2, rayWidth + 1, wallHeight);
+            }
+
+            zombies.forEach(z => {
+                let zdx = z.x - px, zdy = z.y - py;
+                let spriteAngle = Math.atan2(zdy, zdx) - pAngle;
+                while (spriteAngle < -Math.PI) spriteAngle += Math.PI * 2;
+                while (spriteAngle > Math.PI) spriteAngle -= Math.PI * 2;
+
+                let dist = Math.hypot(zdx, zdy);
+                let correctedDist = dist * Math.cos(spriteAngle);
+
+                if (dist > 0.3 && Math.abs(spriteAngle) < currentHalfFOV + 0.3) {
+                    let screenX = (canvas.width / 2) + Math.tan(spriteAngle) * (canvas.width / (2 * Math.tan(currentHalfFOV)));
+                    let spriteHeight = (canvas.height / correctedDist) * (BASE_FOV / currentFOV) * (z.isBoss ? 2.4 : 1.0);
+                    let floorY = horizonY + spriteHeight / 2;
+                    let drawY = floorY - spriteHeight;
+
+                    drawZombieSprite(zombieCtx, z, 200);
+                    let spriteWidth = spriteHeight * 0.45;
+                    let startX = Math.floor(screenX - spriteWidth / 2);
+                    let endX = Math.floor(screenX + spriteWidth / 2);
+
+                    for (let x = startX; x < endX; x++) {
+                        let rayIdx = Math.floor((x / canvas.width) * NUM_RAYS);
+                        if (rayIdx >= 0 && rayIdx < NUM_RAYS && (wallDepths[rayIdx] + 0.15) > correctedDist) {
+                            let texX = Math.floor(((x - startX) / spriteWidth) * 200);
+                            ctx.drawImage(zombieCanvas, texX, 0, 1, 200, x, drawY, 1, spriteHeight);
+                        }
+                    }
+                }
+            });
+
+            Object.keys(remotePlayers).forEach(id => {
+                let rp = remotePlayers[id];
+                if (rp.name === playerName) return; // Don't render self as remote
+                let rdx = rp.x - px, rdy = rp.y - py;
+                let rpAngle = Math.atan2(rdy, rdx) - pAngle;
+                while (rpAngle < -Math.PI) rpAngle += Math.PI * 2;
+                while (rpAngle > Math.PI) rpAngle -= Math.PI * 2;
+
+                let dist = Math.hypot(rdx, rdy);
+                let correctedDist = dist * Math.cos(rpAngle);
+
+                if (dist > 0.3 && Math.abs(rpAngle) < currentHalfFOV + 0.3) {
+                    let screenX = (canvas.width / 2) + Math.tan(rpAngle) * (canvas.width / (2 * Math.tan(currentHalfFOV)));
+                    let spriteHeight = (canvas.height / correctedDist) * (BASE_FOV / currentFOV);
+                    let floorY = horizonY + spriteHeight / 2;
+                    let drawY = floorY - spriteHeight;
+                    let spriteWidth = spriteHeight * 0.4;
+
+                    ctx.fillStyle = '#00c3ff';
+                    ctx.fillRect(screenX - spriteWidth / 2, drawY, spriteWidth, spriteHeight);
+
+                    ctx.fillStyle = '#ffffff';
+                    ctx.font = '12px Courier New';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(rp.name || 'Survivor', screenX, drawY - 10);
+                }
+            });
+
+            if (cameraMode === 1) drawGun(ctx);
+            requestAnimationFrame(loop);
+        }
+
+        requestAnimationFrame(loop);
+    </script>
+</body>
+</html>
