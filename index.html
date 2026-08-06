@@ -213,6 +213,11 @@
         playerNameInput.value = playerName;
         let currentRoomId = '';
         let isHost = false;
+        // Server-assigned identity. Never identify players by display name (two players
+        // can share a name), always use this instead.
+        let myPlayerId = null;
+        let zombieIdCounter = 0;
+        let lastZombieSyncSent = 0;
 
         function showRoomMenu() {
             playerName = playerNameInput.value.trim() || playerName;
@@ -241,6 +246,7 @@
             roomMenuContainer.style.display = 'none';
             lobbyContainer.style.display = 'block';
             lobbyStatusEl.innerText = "Hosting Room...";
+            isMultiplayer = true; // FIX: this was never being set, so MOVE (position) updates were never sent
             initCloudWebSocket(currentRoomId);
         }
 
@@ -255,6 +261,7 @@
             roomMenuContainer.style.display = 'none';
             lobbyContainer.style.display = 'block';
             lobbyStatusEl.innerText = "Connecting to room...";
+            isMultiplayer = true; // FIX: this was never being set, so MOVE (position) updates were never sent
             initCloudWebSocket(code);
         }
 
@@ -271,11 +278,21 @@
 
                 ws.onmessage = (event) => {
                     let data = JSON.parse(event.data);
+
+                    if (data.type === 'ASSIGNED_ID') {
+                        // The server tells us our own unique id right after we join.
+                        // FIX: previously the client had no reliable way to know "which
+                        // player is me", and fell back to comparing display names, which
+                        // breaks as soon as two players share (or default to) the same name.
+                        myPlayerId = data.playerId;
+                        return;
+                    }
+
                     if (data.type === 'STATE') {
                         remotePlayers = data.players || {};
-                        
-                        // Check if current user is host based on server designation
-                        isHost = (data.hostId && remotePlayers[data.hostId] && remotePlayers[data.hostId].name === playerName);
+
+                        // FIX: identify host/self by server-assigned id, not by name
+                        isHost = (data.hostId && data.hostId === myPlayerId);
 
                         lobbyRoomDisplay.innerText = `Room Code: ${roomId}`;
                         
@@ -284,7 +301,7 @@
                         let listHtml = `<b>Players (${playerKeys.length}):</b><br>`;
                         playerKeys.forEach(k => {
                             let p = remotePlayers[k];
-                            let isMe = (p.name === playerName);
+                            let isMe = (k === myPlayerId);
                             let hostTag = (k === data.hostId) ? ' [HOST]' : '';
                             listHtml += `- ${p.name}${hostTag} (HP: ${Math.round(p.hp || 100)}%)${isMe ? ' (You)' : ''}<br>`;
                         });
@@ -303,6 +320,49 @@
                         if (data.matchStarted && !playing) {
                             beginMultiplayerGame();
                         }
+                        return;
+                    }
+
+                    // Host sends the authoritative zombie list/wave state; everyone else
+                    // just adopts it, instead of each client simulating its own private zombies.
+                    if (data.type === 'ZOMBIE_SYNC' && !isHost) {
+                        zombies = data.zombies || [];
+                        currentWave = data.currentWave;
+                        waveZombiesToSpawn = data.waveZombiesToSpawn;
+                        isBossWave = data.isBossWave;
+                        if (data.isWaveTransitioning && !isWaveTransitioning) {
+                            waveBanner.style.display = 'block';
+                        }
+                        if (!data.isWaveTransitioning) {
+                            waveBanner.style.display = 'none';
+                        }
+                        isWaveTransitioning = data.isWaveTransitioning;
+                        updateHUD();
+                        return;
+                    }
+
+                    // A non-host client reports a bullet hit on a zombie; only the host
+                    // applies it to the authoritative zombie list (and re-broadcasts it).
+                    if (data.type === 'ZOMBIE_HIT' && isHost) {
+                        let z = zombies.find(zz => zz.id === data.zombieId);
+                        if (z) {
+                            z.hp -= data.damage;
+                            z.hitTimer = 0.15;
+                            z.isAggro = true;
+                        }
+                        return;
+                    }
+
+                    // Host tells a specific player a zombie just attacked them.
+                    if (data.type === 'ZOMBIE_ATTACK' && data.targetId === myPlayerId) {
+                        hp -= data.damage;
+                        updateHUD();
+                        if (hp <= 0 && playing) {
+                            document.exitPointerLock(); playing = false; overlay.style.display = 'flex';
+                            document.getElementById('title').innerText = "YOU DIED";
+                            document.getElementById('sub').innerText = `Survived Wave ${currentWave} | Cash: $${playerMoney}. Refresh to restart.`;
+                        }
+                        return;
                     }
                 };
 
@@ -557,6 +617,7 @@
             if (isBossWave) {
                 let bossHp = 80 + (currentWave * 15);
                 zombies.push({
+                    id: zombieIdCounter++,
                     x: SINGLE_SPAWN_POINT.x, y: SINGLE_SPAWN_POINT.y, hp: bossHp, maxHp: bossHp,
                     animTimer: 0, hitTimer: 0, isAggro: true, speed: 1.1, isBoss: true,
                     wanderTarget: getNewWanderTarget()
@@ -565,6 +626,7 @@
                 let maxHp = 2 + Math.floor(currentWave / 2);
                 let speed = 0.8 + (currentWave * 0.05);
                 zombies.push({
+                    id: zombieIdCounter++,
                     x: SINGLE_SPAWN_POINT.x, y: SINGLE_SPAWN_POINT.y, hp: maxHp, maxHp: maxHp,
                     animTimer: Math.random() * 10, hitTimer: 0, isAggro: false, speed: speed, isBoss: false,
                     wanderTarget: getNewWanderTarget()
@@ -685,6 +747,13 @@
                     hitZombie.hitTimer = 0.15;
                     hitZombie.isAggro = true;
                     createHitParticles(aimX, aimY, currentWeaponKey === 'plasma' ? '#00e1ff' : '#880000');
+
+                    // If we're a joiner (not host), the host owns the authoritative zombie
+                    // list, so tell it about this hit -- otherwise our shots would appear
+                    // to do nothing once the next ZOMBIE_SYNC overwrites our local copy.
+                    if (isMultiplayer && !isHost && ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ type: 'ZOMBIE_HIT', zombieId: hitZombie.id, damage: w.damage }));
+                    }
 
                     if (hitZombie.hp <= 0) {
                         playerMoney += (hitZombie.isBoss ? 500 : 25) * currentWave;
@@ -877,7 +946,7 @@
             // Draw Remote Players on Minimap
             Object.keys(remotePlayers).forEach(id => {
                 let rp = remotePlayers[id];
-                if (rp.name === playerName) return;
+                if (id === myPlayerId) return; // FIX: was comparing by name, which breaks if names match
                 minimapCtx.fillStyle = '#00c3ff';
                 minimapCtx.beginPath();
                 minimapCtx.arc(rp.x * scaleX, rp.y * scaleY, 3, 0, Math.PI * 2);
@@ -953,48 +1022,100 @@
 
                 gunOffsetY = isMoving ? Math.sin(now * 0.01) * 6 : Math.sin(now * 0.003) * 2;
 
-                if (waveZombiesToSpawn > 0) {
-                    respawnCooldown -= dt;
-                    if (respawnCooldown <= 0) {
-                        spawnZombieAtSinglePoint();
-                        waveZombiesToSpawn--;
-                        respawnCooldown = 2.0;
-                    }
-                }
+                // FIX: zombies used to be spawned & simulated independently on every client,
+                // so the host and the joiner were literally fighting two different sets of
+                // enemies. Now only the host (or a solo player) runs spawning/AI; that state
+                // gets broadcast to everyone else via ZOMBIE_SYNC below.
+                let simulatesZombies = !isMultiplayer || isHost;
 
-                if (waveZombiesToSpawn === 0 && zombies.length === 0 && !isWaveTransitioning) {
-                    isWaveTransitioning = true;
-                    waveBanner.style.display = 'block';
-                    setTimeout(() => startWave(currentWave + 1), 3500);
-                }
-
-                zombies.forEach((z) => {
-                    if (z.hitTimer > 0) z.hitTimer -= dt;
-                    let zdx = px - z.x, zdy = py - z.y;
-                    let distToPlayer = Math.hypot(zdx, zdy);
-                    if (!z.isAggro && distToPlayer < 7 && hasLineOfSight(px, py, z.x, z.y)) z.isAggro = true;
-                    z.animTimer += dt;
-
-                    if (z.isAggro) {
-                        let stopDist = z.isBoss ? 1.2 : 0.4;
-                        if (distToPlayer > stopDist) {
-                            let wobbleAngle = Math.atan2(zdy, zdx) + Math.sin(z.animTimer * 2.5) * 0.35;
-                            let moveX = Math.cos(wobbleAngle) * z.speed * dt;
-                            let moveY = Math.sin(wobbleAngle) * z.speed * dt;
-                            if (map[Math.floor(z.y) * MAP_SIZE + Math.floor(z.x + moveX * 2)] === 0) z.x += moveX;
-                            if (map[Math.floor(z.y + moveY * 2) * MAP_SIZE + Math.floor(z.x)] === 0) z.y += moveY;
-                        } else {
-                            hp -= (z.isBoss ? 40 : 20) * dt; updateHUD();
-                            if (hp <= 0) {
-                                document.exitPointerLock(); playing = false; overlay.style.display = 'flex';
-                                document.getElementById('title').innerText = "YOU DIED";
-                                document.getElementById('sub').innerText = `Survived Wave ${currentWave} | Cash: $${playerMoney}. Refresh to restart.`;
-                            }
+                if (simulatesZombies) {
+                    if (waveZombiesToSpawn > 0) {
+                        respawnCooldown -= dt;
+                        if (respawnCooldown <= 0) {
+                            spawnZombieAtSinglePoint();
+                            waveZombiesToSpawn--;
+                            respawnCooldown = 2.0;
                         }
                     }
-                });
 
-                zombies = zombies.filter(z => z.hp > 0);
+                    if (waveZombiesToSpawn === 0 && zombies.length === 0 && !isWaveTransitioning) {
+                        isWaveTransitioning = true;
+                        waveBanner.style.display = 'block';
+                        setTimeout(() => startWave(currentWave + 1), 3500);
+                    }
+
+                    // Build the list of candidate targets a zombie can chase: ourselves,
+                    // plus (in multiplayer) every other player in the room, so zombies can
+                    // go after whichever player is actually closest instead of always "px,py".
+                    let targets = [{ id: myPlayerId || 'self', x: px, y: py, isLocal: true }];
+                    if (isMultiplayer) {
+                        Object.keys(remotePlayers).forEach(id => {
+                            if (id === myPlayerId) return;
+                            let rp = remotePlayers[id];
+                            targets.push({ id: id, x: rp.x, y: rp.y, isLocal: false });
+                        });
+                    }
+
+                    zombies.forEach((z) => {
+                        if (z.hitTimer > 0) z.hitTimer -= dt;
+                        z.animTimer += dt;
+
+                        // Find nearest target among all players
+                        let nearest = null, nearestDist = Infinity;
+                        targets.forEach(t => {
+                            let d = Math.hypot(t.x - z.x, t.y - z.y);
+                            if (d < nearestDist) { nearestDist = d; nearest = t; }
+                        });
+                        if (!nearest) return;
+
+                        let zdx = nearest.x - z.x, zdy = nearest.y - z.y;
+                        let distToPlayer = nearestDist;
+
+                        if (!z.isAggro && distToPlayer < 7 && hasLineOfSight(nearest.x, nearest.y, z.x, z.y)) z.isAggro = true;
+
+                        if (z.isAggro) {
+                            let stopDist = z.isBoss ? 1.2 : 0.4;
+                            if (distToPlayer > stopDist) {
+                                let wobbleAngle = Math.atan2(zdy, zdx) + Math.sin(z.animTimer * 2.5) * 0.35;
+                                let moveX = Math.cos(wobbleAngle) * z.speed * dt;
+                                let moveY = Math.sin(wobbleAngle) * z.speed * dt;
+                                if (map[Math.floor(z.y) * MAP_SIZE + Math.floor(z.x + moveX * 2)] === 0) z.x += moveX;
+                                if (map[Math.floor(z.y + moveY * 2) * MAP_SIZE + Math.floor(z.x)] === 0) z.y += moveY;
+                            } else {
+                                let dmg = (z.isBoss ? 40 : 20) * dt;
+                                if (nearest.isLocal) {
+                                    hp -= dmg; updateHUD();
+                                    if (hp <= 0) {
+                                        document.exitPointerLock(); playing = false; overlay.style.display = 'flex';
+                                        document.getElementById('title').innerText = "YOU DIED";
+                                        document.getElementById('sub').innerText = `Survived Wave ${currentWave} | Cash: $${playerMoney}. Refresh to restart.`;
+                                    }
+                                } else if (ws && ws.readyState === WebSocket.OPEN) {
+                                    // Tell the remote player they're being attacked -- we (host)
+                                    // can't reach into their local `hp` variable directly.
+                                    ws.send(JSON.stringify({ type: 'ZOMBIE_ATTACK', targetId: nearest.id, damage: dmg }));
+                                }
+                            }
+                        }
+                    });
+
+                    zombies = zombies.filter(z => z.hp > 0);
+
+                    // Push our authoritative zombie/wave state down to everyone else in
+                    // the room, throttled to ~10 times/sec instead of every frame.
+                    if (isMultiplayer && ws && ws.readyState === WebSocket.OPEN && (now - lastZombieSyncSent > 100)) {
+                        lastZombieSyncSent = now;
+                        ws.send(JSON.stringify({
+                            type: 'ZOMBIE_SYNC',
+                            zombies: zombies,
+                            currentWave: currentWave,
+                            waveZombiesToSpawn: waveZombiesToSpawn,
+                            isBossWave: isBossWave,
+                            isWaveTransitioning: isWaveTransitioning
+                        }));
+                    }
+                }
+
                 if (gunRecoilY > 0) gunRecoilY -= 200 * dt;
                 if (gunRecoilY < 0) gunRecoilY = 0;
                 if (muzzleFlashTimer > 0) muzzleFlashTimer -= dt;
@@ -1063,7 +1184,7 @@
             // Render other players in 3D space with their custom names and status
             Object.keys(remotePlayers).forEach(id => {
                 let rp = remotePlayers[id];
-                if (rp.name === playerName) return; 
+                if (id === myPlayerId) return; // FIX: was comparing by name, which breaks if names match
                 let rdx = rp.x - px, rdy = rp.y - py;
                 let rpAngle = Math.atan2(rdy, rdx) - pAngle;
                 while (rpAngle < -Math.PI) rpAngle += Math.PI * 2;
